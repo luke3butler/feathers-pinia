@@ -1,12 +1,12 @@
-import { Params, Paginated, QueryInfo } from './types'
+import type { Params, Paginated, QueryInfo, DiffDefinition } from './types'
+import type { MaybeRef } from './utility-types'
+import type { AnyData, AnyDataOrArray, BaseModelAssociations, FindClassParams } from './service-store/types'
 import { _ } from '@feathersjs/commons'
 import stringify from 'fast-json-stable-stringify'
-import ObjectID from 'bson-objectid'
-import { Id } from '@feathersjs/feathers'
+import ObjectID from 'isomorphic-mongo-objectid'
 import fastCopy from 'fast-copy'
-import { AnyData, AnyDataOrArray } from './service-store/types'
-import { unref } from 'vue-demi'
-import { MaybeRef } from './utility-types'
+import { computed, Ref, unref } from 'vue-demi'
+import isEqual from 'fast-deep-equal'
 
 function stringifyIfObject(val: any): string | any {
   if (typeof val === 'object' && val != null) {
@@ -23,7 +23,7 @@ function stringifyIfObject(val: any): string | any {
  * @param item
  * @param idField
  */
-export function getId(item: any, idField?: string) {
+export function getId(item: any, idField: string) {
   if (!item) return
   if (idField && item[idField] != undefined) {
     return stringifyIfObject(item[idField as string])
@@ -40,14 +40,11 @@ export function getTempId(item: any, tempIdField: string) {
     return stringifyIfObject(item[tempIdField])
   }
 }
-export function getAnyId(item: any, tempIdField: string) {
-  return getId(item) != undefined ? getId(item) : getTempId(item, tempIdField)
+export function getAnyId(item: any, tempIdField: string, idField: string) {
+  return getId(item, idField) != undefined ? getId(item, idField) : getTempId(item, tempIdField)
 }
 
-export function getQueryInfo(
-  params: Params = {},
-  response: Partial<Pick<Paginated<any>, 'limit' | 'skip'>> = {},
-): QueryInfo {
+export function getQueryInfo(params: Params = {}, response: Partial<Paginated<any>> = {}): QueryInfo {
   const { query = {}, qid = 'default' } = params
   const $limit = response.limit != undefined ? response.limit : query?.$limit
   const $skip = response.skip != undefined ? response.skip : query?.$skip
@@ -65,7 +62,7 @@ export function getQueryInfo(
     queryParams,
     pageParams,
     pageId,
-    response: undefined,
+    response,
     isOutdated: undefined as boolean | undefined,
   }
 }
@@ -83,21 +80,13 @@ export function getItemsFromQueryInfo(pagination: any, queryInfo: any, keyedById
   }
 }
 
-export function keyBy(items: any, fn: Function = (i: any) => getId(i)) {
-  return items.reduce((all: any, current: any) => {
-    const id = fn(current)
-    all[id] = current
-    return all
-  }, {})
-}
-
 /**
  * Generate a new tempId and mark the record as a temp
  * @param state
  * @param item
  */
 export function assignTempId(item: any, tempIdField: string) {
-  const newId = new ObjectID().toHexString()
+  const newId = new ObjectID().toString()
   item[tempIdField] = newId
   return item
 }
@@ -109,7 +98,7 @@ export function assignTempId(item: any, tempIdField: string) {
  */
 export function cleanData<T = AnyDataOrArray>(data: T, tempIdField: string): T {
   const { items, isArray } = getArray(data)
-  const cleaned = items.map((item) => _.omit(item, '__isClone', tempIdField))
+  const cleaned = items.map((item) => _.omit(item, tempIdField))
 
   return isArray ? cleaned : cleaned[0]
 }
@@ -177,4 +166,103 @@ export function markAsClone<T>(item: T) {
     enumerable: false,
   })
   return item
+}
+
+/**
+ * Copies the property definitions for the model associations from src to dest.
+ *
+ * @param src source instance
+ * @param dest destination instance
+ * @param associations {BaseModelAssociations} from Model.associations
+ */
+export function copyAssociations<M>(src: M, dest: M, associations: BaseModelAssociations) {
+  Object.keys(associations).forEach((key: string) => {
+    const desc = Object.getOwnPropertyDescriptor(src, key)
+    Object.defineProperty(dest, key, desc as PropertyDescriptor)
+  })
+}
+
+export function pickDiff(obj: any, diffDef: DiffDefinition) {
+  // If no diff definition was given, return the entire object.
+  if (!diffDef) return obj
+
+  // Normalize all types into an array and pick the keys
+  const keys = typeof diffDef === 'string' ? [diffDef] : Array.isArray(diffDef) ? diffDef : Object.keys(diffDef || obj)
+  const topLevelKeys = keys.map((key) => key.toString().split('.')[0])
+  return _.pick(obj, ...topLevelKeys)
+}
+
+export function diff(original: AnyData, clone: AnyData, diffDef: DiffDefinition) {
+  const originalVal = pickDiff(original, diffDef)
+  const cloneVal = pickDiff(clone, diffDef)
+
+  // If diff was an object, merge the values into the cloneVal
+  if (typeof diffDef !== 'string' && !Array.isArray(diffDef)) {
+    Object.assign(cloneVal, diffDef)
+  }
+
+  const areEqual = isEqual(originalVal, cloneVal)
+
+  if (areEqual) return {}
+
+  // Loop through clone, compare original value to clone value, if different add to diff object.
+  const diff = Object.keys(cloneVal).reduce((diff: AnyData, key) => {
+    if (!isEqual(original[key], cloneVal[key])) {
+      diff[key] = cloneVal[key]
+    }
+    return diff
+  }, {})
+
+  return diff
+}
+
+export const setOnRef = (obj: any, key: string, val: number) => {
+  (obj.value || obj)[key] = val
+}
+export const computedAttr = (obj: any, key: string) =>
+  computed({
+    set: (val) => setOnRef(obj, key, val),
+    get: () => unref(obj)[key],
+  })
+
+/**
+ * A wrapper for findInStore that can return server-paginated data
+ */
+export const makeUseFindItems = (store: any, params: any) => {
+  return computed(() => {
+    const _params: any = unref(params)
+
+    if (_params) {
+      if (_params.paginate || _params.onServer) {
+        const { defaultSkip, defaultLimit } = store.pagination
+        const skip = _params.query.$skip || defaultSkip
+        const limit = _params.query.$limit || defaultLimit
+        const pagination = store.pagination[_params.qid || 'default'] || {}
+        const response = skip != null && limit != null ? { limit, skip } : {}
+        const queryInfo = getQueryInfo(_params, response)
+        const items = getItemsFromQueryInfo(pagination, queryInfo, store.itemsById)
+        return items
+      } else {
+        return store.findInStore(_params).data
+      }
+    } else {
+      return []
+    }
+  })
+}
+
+export function makeParamsWithoutPage(params: MaybeRef<FindClassParams>) {
+  params = unref(params)
+  const query = _.omit(params.query, '$limit', '$skip')
+  const newParams = _.omit(params, 'query', 'store')
+  return { ...newParams, query }
+}
+
+// Updates the _params with everything from _newParams except `$limit` and `$skip`
+export function updateParamsExcludePage(_params: Ref<FindClassParams>, _newParams: MaybeRef<FindClassParams>) {
+  _newParams = unref(_newParams)
+  const query = _.omit(_newParams.query, '$limit', '$skip')
+  const newParams = _.omit(_params.value, 'store', 'query')
+  Object.assign(_params.value.query, query)
+  Object.assign(_params.value, newParams)
 }

@@ -12,6 +12,11 @@ class Message extends BaseModel {
   __tempId?: number
   text: string
   otherText?: string
+
+  constructor(data: Partial<Message>, options: Record<string, any> = {}) {
+    super(data, options)
+    this.init(data)
+  }
 }
 const servicePath = 'messages'
 const useMessages = defineStore({ servicePath, Model: Message })
@@ -27,7 +32,7 @@ describe('Store Actions', () => {
   test('addToStore incrementally updates item in tempsById', () => {
     const message = new Message({ text: 'this is a test' })
     const itemInStore = messagesStore.addToStore(message)
-    const tempId = itemInStore.__tempId
+    const tempId: any = itemInStore.__tempId
 
     expect(itemInStore).toBe(messagesStore.tempsById[tempId])
     expect(itemInStore.id).toBeUndefined()
@@ -52,5 +57,22 @@ describe('Store Actions', () => {
     const messageWithMoreKeys = Object.assign({}, message, { otherText: 'added' })
     messagesStore.addToStore(messageWithMoreKeys)
     expect(itemInStore.otherText).toBe('added')
+  })
+
+  test('non-paginated data is still returned as response.data', async () => {
+    // Turn off pagination
+    const oldPaginateOptions = messagesStore.service.options.paginate
+    messagesStore.service.options.paginate = false
+
+    await new Message({ text: 'this is a test' }).save()
+    await new Message({ text: 'this is a test' }).save()
+    await new Message({ text: 'this is a test' }).save()
+
+    const response = await messagesStore.find({ query: {} })
+
+    expect(Array.isArray(response.data)).toBeTruthy()
+
+    // Turn pagination back on
+    messagesStore.service.options.paginate = oldPaginateOptions
   })
 })

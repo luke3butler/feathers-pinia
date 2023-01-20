@@ -1,23 +1,23 @@
 export { setupFeathersPinia } from './setup'
-export { defineStore } from './service-store/define-store'
+export { defineStore, BaseModel } from './service-store'
 export { defineAuthStore } from './define-auth-store'
-export { makeServiceStore, BaseModel } from './service-store/index'
-export { makeState } from './service-store/make-state'
+export { associateFind } from './associate-find'
+export { associateGet } from './associate-get'
 
 export { models } from './models'
 export { clients, registerClient } from './clients'
+export { OFetch } from './feathers-ofetch'
 
-export { useFind } from './use-find'
-export { useGet } from './use-get'
+export { Find, useFind } from './use-find'
+export { Get, useGet } from './use-get'
+export { useFindWatched } from './use-find-watched'
+export { useGetWatched } from './use-get-watched'
 export { usePagination } from './use-pagination'
 export { useClones } from './use-clones'
-/**
- * @deprecated `handleClones` has been renamed to `useClones`.
- */
-export { useClones as handleClones } from './use-clones'
+export { useClone } from './use-clone'
+export { useAuth } from './use-auth'
 
 export { syncWithStorage } from './storage-sync'
-export { syncWithStorageCompressed } from './storage-sync-compressed'
 export { clearStorage } from './clear-storage'
 
 export * from './types'

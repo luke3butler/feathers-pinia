@@ -1,15 +1,15 @@
-import { MakeServiceGettersOptions, ServiceStoreDefaultGetters, ServiceStoreDefaultState } from './types'
-import { Params } from '../types'
-import { Id } from '@feathersjs/feathers'
-
+import type { MakeServiceGettersOptions, ServiceStoreDefaultGetters, ServiceStoreDefaultState } from './types'
+import type { Params } from '../types'
+import type { Id } from '@feathersjs/feathers'
+import type { StateTree, _GettersTree } from 'pinia'
+import type { TypedGetters } from '../utility-types'
 import sift from 'sift'
+import { operations } from '../utils-custom-operators'
 import { _ } from '@feathersjs/commons'
 import { filterQuery, sorter, select } from '@feathersjs/adapter-commons'
 import { unref } from 'vue-demi'
 import fastCopy from 'fast-copy'
-import { StateTree, _GettersTree } from 'pinia'
 import { BaseModel } from './base-model'
-import { TypedGetters } from '../utility-types'
 
 const FILTERS = ['$sort', '$limit', '$skip', '$select']
 const additionalOperators = ['$elemMatch']
@@ -19,12 +19,8 @@ type ServiceStoreTypedGetters<M extends BaseModel = BaseModel> = TypedGetters<
   ServiceStoreDefaultGetters<M>
 >
 
-export function makeGetters<
-  M extends BaseModel = BaseModel,
-  S extends StateTree = StateTree,
-  G extends _GettersTree<S> = {}
->(
-  options: MakeServiceGettersOptions<M, S, G>
+export function makeGetters<M extends BaseModel = BaseModel, S extends StateTree = {}, G extends _GettersTree<S> = {}>(
+  options: MakeServiceGettersOptions<M, S, G>,
 ): ServiceStoreDefaultGetters<M> & G {
   const defaultGetters: ServiceStoreTypedGetters<M> = {
     // Returns the Feathers service currently assigned to this store.
@@ -72,15 +68,18 @@ export function makeGetters<
         const { query, filters } = filterQuery(q, {
           operators: additionalOperators
             .concat(whitelist || [])
+            .concat(['$like', '$iLike', '$ilike', '$notLike', '$notILike'])
             .concat(this.service.options?.allow || this.service.options?.whitelist || []),
         })
+        if (filters.$or) query.$or = filters.$or
+
         let values = _.values(itemsById)
 
         if (params.temps) {
           values.push(..._.values(this.tempsById))
         }
 
-        values = values.filter(sift(query))
+        values = values.filter(sift(query, { operations }))
 
         const total = values.length
 
@@ -96,14 +95,15 @@ export function makeGetters<
           values = values.slice(0, filters.$limit)
         }
 
-        if (filters.$select) {
-          values = values.map((value) => _.pick(value, ...filters.$select.slice()))
-        }
+        // TODO: explore if there's any useful benefit to $select on the client. Right now this causes an infinite loop.
+        // if (filters.$select) {
+        //   values = values.map((value) => _.pick(value, ...filters.$select.slice(), this.idField, this.tempIdField))
+        // }
 
         // Make sure items are instances
         values = values.map((item) => {
           if (item && !item.constructor.modelName) {
-            // @ts-expect-error access action in getter is not intended
+            // @ts-expect-error it's ok to do this side effect once.
             item = this.addOrUpdate(item)
           }
           return item
@@ -131,12 +131,16 @@ export function makeGetters<
       }
     },
     getFromStore() {
-      return (id: Id, params: Params = {}) => {
+      return (id: Id | null, params: Params = {}) => {
         id = unref(id)
         params = fastCopy(unref(params) || {})
 
-        let item = this.itemsById[id] && select(params, this.idField)(this.itemsById[id])
-        if (!item) item = this.tempsById[id] && select(params, this.tempIdField)(this.tempsById[id])
+        let item = null
+        const existingItem = this.itemsById[id as Id] && select(params, this.idField)(this.itemsById[id as Id])
+        const tempItem = this.tempsById[id as Id] && select(params, this.tempIdField)(this.tempsById[id as Id])
+
+        if (existingItem) item = existingItem
+        else if (tempItem) item = tempItem
 
         // Make sure item is an instance
         if (item && !item.constructor.modelName) {
@@ -157,10 +161,10 @@ export function makeGetters<
     },
     isRemovePending() {
       return makePending('remove', this)
-    }
+    },
   }
 
-  return Object.assign(defaultGetters, options.getters);
+  return Object.assign(defaultGetters, options.getters)
 }
 
 function makePending(method: string, store: any): boolean {

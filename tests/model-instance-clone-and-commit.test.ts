@@ -7,9 +7,19 @@ const pinia = createPinia()
 const { defineStore, BaseModel } = setupFeathersPinia({ clients: { api } })
 
 class Message extends BaseModel {
-  id: string
+  id: string | number
+  text: string
   foo: any
   additionalData: any
+
+  get baz() {
+    return 'baz'
+  }
+
+  constructor(data: Partial<Message>, options: Record<string, any> = {}) {
+    super(data, options)
+    this.init(data)
+  }
 }
 
 const servicePath = 'messages'
@@ -17,7 +27,8 @@ const useMessagesService = defineStore({ servicePath, Model: Message })
 
 const messagesService = useMessagesService(pinia)
 
-describe('Clone & commit', () => {
+describe('Clone & Commit', () => {
+  //
   test('can clone ', async () => {
     const message = await messagesService.create({
       text: 'Quick, what is the number to 911?',
@@ -27,6 +38,7 @@ describe('Clone & commit', () => {
     expect(clone.__isClone).toBe(true)
     expect(message === clone).toBe(false)
     expect(clone).toHaveProperty('additionalData')
+    expect(clone.baz).toBe('baz')
     expect(clone.additionalData).toBe('a boolean is fine')
   })
 
@@ -39,18 +51,18 @@ describe('Clone & commit', () => {
     const committed = clone.commit()
 
     expect(committed.foo).toBe('bar')
+    expect(committed.baz).toBe('baz')
     expect(committed.__isClone).toBeUndefined()
   })
 
-  test('can reset', async () => {
+  test('resetting an original gives you a clone', async () => {
     const message = await messagesService.create({
       text: 'Quick, what is the number to 911?',
     })
     const clone = message.reset({ foo: 'bar' })
-    const reset = clone.clone()
 
-    expect(reset.foo).toBeUndefined()
-    expect(clone === reset).toBeTruthy()
+    expect(clone.foo).toBe('bar')
+    expect(clone.__isClone).toBeTruthy()
   })
 
   test('items and clones point to values in store', async () => {

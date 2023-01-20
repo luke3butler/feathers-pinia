@@ -24,7 +24,7 @@ Here's a look at the `DefineStoreOptions` interface. By the way, there's lots of
 import { Application as FeathersClient } from '@feathersjs/feathers'
 
 interface DefineStoreOptions {
-  ssr?: boolean // New in 0.24.0
+  ssr?: boolean
   servicePath: string
   Model?: any
   idField?: 'id' | '_id' | string
@@ -35,7 +35,7 @@ interface DefineStoreOptions {
   handleEvents?: HandleEvents
   enableEvents?: boolean
   debounceEventsTime?: number
-  debounceEventsMaxWait?: number
+  debounceEventsGuarantee?: boolean
   whitelist?: string[]
   paramsForServer?: string[]
   state?: () => { [k: string]: any }
@@ -63,7 +63,7 @@ Here are a few more details about each option:
 - **`enableEvents {Boolean}`** enables and disables the built-in realtime event handlers. Defaults to `true`.
 - **`handleEvents {Object}`** is an object that lets you customize how realtime events are handled. Each key is a name of a realtime event handler function: `created`, `patched`, `updated`, or `removed`. By default, each handler returns the value of `enableEvents`, which is why setting `enableEvents` to false will disable all handlers. You can provide your own handler to customize and override individual events.
 - **`debounceEventsTime {Number}`** determines how long to wait until flushing a batch of events. Defaults to `20`. If no events have been received in a 20 millisecond period, all gathered events will be processed.
-- **`debounceEventsMaxWait {Number}`** allows forcing events to be flushed after a certain number of milliseconds. Defaults to `1000`.
+- **`debounceEventsGuarantee {Boolean}`** forces accumulated events to flush every `debounceEventsTime` interval. Off by default.
 - **`whitelist`** is an array of keys to allow in the `findInStore` getter's `params.query` object.
 - **`paramsForServer`** is an array of keys to allow in the params object for the `find` actions's `params.query` object but to omit on the `findInStore` getter's `params.query` object.
 - **`state`** is a function that returns an object of custom state to customize the store.
@@ -231,6 +231,25 @@ Uses the Feathers Client to send an `patch` request to the API server.
 ### `remove(id, params)`
 
 Uses the Feathers Client to send a `remove` request to the API server.
+
+### `afterFind(response)`
+
+The `afterFind` method is a store-level callback that gets called with the response data once the response data has been added to the store.  It's useful if you need to access additional keys on the reponse object.
+
+```js
+
+export const useUsers = defineStore({
+  servicePath,
+  Model: User,
+  actions: {
+    afterFind (response: any) {
+      // do extra processing on the response
+    },
+  },
+})
+```
+
+See an example on the [Common Patterns](./common-patterns#handling-custom-server-responses) page.
 
 ## Custom Properties
 

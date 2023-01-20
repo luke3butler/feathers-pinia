@@ -71,7 +71,7 @@ const todo = new todoStore.Model({ description: 'Do the Dishes' }).addToStore()
 
 <BlockQuote label="Tip About Reactivity">
 
-Model instances are NOT reactive until you call `instance.addToStore()`. A non-reactive model instance will update with the server data after `create`, only.  If you want reactive data for `patch` or `update` methods, you need to call `instance.addToStore()`, first.
+Model instances are NOT reactive until you call `instance.addToStore()`. However, a non-reactive model instance will update with the server data after `create`.  If you want reactive data for `patch` or `update` methods, you need to call `instance.addToStore()`, first.  If you want to bind to a template, you call `addToStore`, first.
 
 </BlockQuote>
 
@@ -92,7 +92,7 @@ todo.removeFromStore()
 
 ### `instance.save(params)`
 
-The `save` method is a convenience wrapper for the `create/patch` methods, by default. If the records has no `id` or `_id`, the `instance.create()`method will be used. The`params` argument will be used in the Feathers client request. See the [Feathers Service](https://docs.feathersjs.com/guides/basics/services.html#service-methods) docs, for reference on where params are used in each method.
+The `save` method is a convenience wrapper for the `create/patch` methods. If the records has no `id` field matching the `idField`, the `instance.create()`method will be used. The`params` argument will be used in the Feathers client request. See the [Feathers Service](https://docs.feathersjs.com/guides/basics/services.html#service-methods) docs, for reference on where params are used in each method.
 
 ```ts
 import { useTodos } from '../store/todos'
@@ -104,7 +104,7 @@ const todo = new todoStore.Model({ description: 'Do something!' }).addToStore()
 await todo.save() // --> Creates the todo on the server.
 ```
 
-Once the `create` response returns, the record will have an idField that's usually assigned by the server.  Most databases are setup to give each record an `id`.  Others use a different field. For example, MongoDB uses `_id`. If you call `instance.save()` again, it will call `instance.patch()`. The method used depends solely on the data having an id (a property that matches the `options.idField` for this service).
+Once the `create` response returns, the record will have an idField that's usually assigned by the server.  Most databases are setup to give each record an `id`.  Others use a different field. For example, MongoDB uses `_id`. If you call `instance.save()` again, the method will call `instance.patch()`. Which method is used depends solely on whether the data has a proeprty matchin ghte `idField` in the service store.
 
 <BlockQuote label="No `preferUpdate` option" type="info">
 
@@ -151,6 +151,32 @@ const todoStore = useTodos()
 const todo = new todoStore.Model({ description: 'Do Something', isComplete: false })
 await todo.patch({ data: { isComplete: true } })
 ```
+
+```ts
+
+save_user({ diff: 'name' })
+
+// Only available for clones
+todoClone.patch({ diff: Key, Key[], obj })
+todoClone.patch({ data: diffedObj })
+
+todoClone.patch({ diff: 'name' })
+todoClone.patch({ data: { name: 'foo' } })
+
+todoClone.patch({ diff: ['name', 'photo'] })
+todoClone.patch({ data: { name: 'foo', photo: 'bar' } })
+
+todoClone.patch({ diff: { name: 'foo', photo: 'bar' } })
+todoClone.patch({ data: { name: 'foo' } }) // only name changed, so photo doesn't get sent.
+
+todoClone.patch({ diff: 'name', with: ['teamId'] })
+todoClone.patch({ data: { name: 'foo', requiredKey: 'bar' } })
+```
+
+Additional Features:
+
+- MongoDB can patch nested data with dot-notated keys.
+- How can we support MongoDB multi sub-document patching?
 
 ### `instance.update(params)`
 

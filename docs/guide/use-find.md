@@ -3,317 +3,361 @@ outline: deep
 ---
 
 <script setup>
-  import Badge from '../components/Badge.vue'
+import Badge from '../components/Badge.vue'
+import BlockQuote from '../components/BlockQuote.vue'
 import V2Block from '../components/V2Block.vue'
 </script>
 
 <V2Block />
 
-# useFind
+# The `useFind` Utility
 
 [[toc]]
 
-The `useFind` utility reduces boilerplate for querying with fall-through cache and realtime updates. To get started with it you provide a `model` class and a computed `params` object.
+The `useFind` function is a Vue Composition API utility that takes the work out of retrieving lists of records from the store or API server.
 
-Let's use the example of creating a User Guide, where we need to pull in the various `Tutorial` records from our `tutorials` service. We'll keep it simple in the template and just show a list of the names.
+## Overview of Features
 
-The goal with the examples is to focus as much as possible on functionality and not boilerplate. As such, all examples use [auto-import](https://github.com/antfu/unplugin-auto-import) for Vue APIs like `computed` and `ref`. They also use Vue's `script setup` feature. Both features come preinstalled with the [Vitesse Template for Vue](https://github.com/antfu/vitesse) and the [Vitesse-Feathers-Pinia Demo](https://github.com/marshallswain/vitesse-feathers-pinia).
+In version 1.0, the `useFind` utility has been completely rewritten from scratch.  It is a workflow-driven utility, which makes it a pleasure to use. Here's an overview of its features:
 
-```vue
-<template>
-  <ul>
-    <li v-for="tutorial in tutorials" :key="tutorial.id">
-      {{ tutorial.name }}
-    </li>
-  </ul>
-</template>
+- **Intelligent Fall-Through Caching** - Like SWR, but way smarter.
+- **Live Queries** - For server data, reactive records. For client-side data, reactive lists and records. No need to manually refresh data.
+- **Client-Side Pagination** - Built in, sharing the same logic with `usePagination`.
+- **Server-Side Pagination** - Also built in and made super easy.
+- **Infinite Pagination Support** - Bind to `allData` and tell it when to load more data.
+- **Declarative Workflow Support** - Compose computed params and let query as they change.
+- **Imperative Workflow Support** - Pass reactive params for imperative control.
 
-<script setup>
+<BlockQuote>
+
+To lighten the burden of migrating from Feathers-Vuex, the old `useFind` utility is now provided as [`useFindWatched`](./use-find-watched). It is recommended that all new code be written with the new `useFind` API.
+
+</BlockQuote>
+
+## Usage
+
+There are two ways to use `useFind`: from the store (recommended) or standalone.
+
+### Recommended
+
+You can call `useFind` directly from the store. the advantage being that you don't have to provide the `store` in the params, as shown here:
+
+```ts
+import { useMessages } from '../store/messages'
+
+interface Props {
+  userId: string | number
+}
+const props = defineProps<Props>()
+const messageStore = useMessages()
+
+const query = computed(() => ({ userId: props.userId }))
+
+// client-side pagination with manual fetch
+const { data, prev, next, find } = messageStore.useFind({ query })
+await find() // retrieve data for the current query
+await next() // show the next page of results
+await prev() // show the previous page of results
+
+// server-side pagination with auto fetch
+const { data, prev, next } = messageStore.useFind({ query, onServer: true })
+await next() // retrieve the next page of results
+await prev() // retrieve the previous page of results
+```
+
+### Standalone
+
+In standalone mode, you have to import `useFind` and provide the `store` option in the params object, as shown here:
+
+```ts
+import { useMessages } from '../store/messages'
 import { useFind } from 'feathers-pinia'
-import { useTutorials } from '../store/tutorials'
 
-// 1. Register and use the store
-const tutorialStore = useTutorials()
+interface Props {
+  userId: string | number
+}
+const props = defineProps<Props>()
+const messageStore = useMessages()
 
-// 2. Create a computed property for the params
-const tutorialsParams = computed(() => {
-  return {
-    query: {},
-  }
-})
-// 3. Provide the Model class and params in the options
-const tutorialsData = useFind({ model: tutorialStore.Model, params: tutorialsParams })
-const tutorials = tutorialsData.items;
-</script>
+const query = computed(() => ({ userId: props.userId }))
+
+// client-side pagination with manual fetch
+const { data, prev, next, find } = useFind({ query, store: messageStore })
+await find() // retrieve data for the current query
+await next() // show the next page of results
+await prev() // show the previous page of results
+
+// server-side pagination with auto fetch
+const { data, prev, next } = useFind({ query, store: messageStore, onServer: true })
+await next() // retrieve the next page of results
+await prev() // retrieve the previous page of results
 ```
 
-Let's review each of the numbered comments, above:
+## API
 
-1. Register and use the store. Since Pinia uses independent stores, the best practice is to import and use them wherever needed. Once you've called the equivalent to `useTutorials`, the `Model` property can be pulled from the store.
-2. Create a computed property for the params. Return an object with a nested `query` object.
-3. Provide the Model class and params in the options
+### `useFind(params)`
 
-## Options
+- **`params`** can be a `reactive` a `ref` or a `computed` object of the following structure:
+  - **`query` {Object}** <Badge type="danger" label="required" /> a Feathers query object.
+  - **`store` {Store}** <Badge type="danger" label="conditionally required" /> a Feathers-Pinia service store. It is required in order to use `useFind` in standalone mode. `useFind` can also be find on any service store by calling `store.useFind(params)`. When called from the store, you do not pass the store object in the params.
+  - **`qid` {string}** an identifier for this query. Allows pagination data to be tracked separately.
+  - **`onServer` {boolean}** when enabled, the internal `findInStore` getter will return only the results that match the current query in the `pagination` object for this store.
+  - **`immediate` {boolean = true}** when `onServer` is set, by default it will make an initial request. Set `immediate: false` to prevent the initial request.
+  - **`watch` {boolean = false}** enable this to automatically query when `reactive` or `ref` params are changed. This does not apply to `computed` params, since they are automatically watched.
 
-Here's a look at the TypeScript definition for the `UseFindOptions` interface.
+### Returned Object
+
+The `useFind` function is actually a factory function that returns an instance of the `Find` class. So when you call `useFind` you get back an object with the following properties:
+
+#### Params & Config
+
+- **`params` {Ref Object}** are an internal, `ref` copy of the initially-provided params.
+- **`store` {Store}** is a reference to the associated store.
+- **`onServer` {boolean}** indicates whether this instance makes requests to the API server. Defaults to `false`.
+- **`isSsr` {Computed boolean}** will be true if `isSsr` was passed into the `defineStore` options for this service store. Useful for awaint the `request` during SSR.
+- **`qid` {Ref string}** the query identifier. Causes this query's pagination data to be stored under its own `qid` in `store.pagination`.
+
+#### Data
+
+- **`data` {Ref Array}** the array of results.
+- **`allData` {Ref Array}** all results for the matching query or server-retrieved data. With `onServer`, will return the correct results, even with custom query params that the store does not understand.
+- **`total` {Computed number}** One of two things: For client-side results, the total number of records in the store that match the query. For `onServer` results, the total number of records on the server that match the query.
+- **`limit` {Ref number}** the pagination `$limit`. Updating this value will change the internal pagination and the returned `data`.
+- **`skip` {Ref number}** the pagination `$skip`. Updating this value will change the internal pagination and the returned `data`.
+
+#### Query Tracking
+
+- **`currentQuery` {Computed Object}** an object containing the following:
+  - **`qid` {string}** the query identifier
+  - **`ids` {number[]}** the ids in this page of data
+  - **`items` {Record[]}** the items in this page of data
+  - **`total` {number}** the total number of items matching this query
+  - **`queriedAt` {number}** the timestamp when this page of data was retrieved. Useful when used with `queryWhen` to prevent repeated queries during a period of time.
+  - **`queryState` {Object}** a pagination object from the store
+- **`latestQuery` {Computed Object}** an object containing the following:
+  - **`pageId` {string}** stable stringified page params
+  - **`pageParams` {Object}** the page params
+  - **`queriedAt` {number}** timestamp when this page of records was received from the server.
+  - **`query` {Object}** the query params, including $limit and $skip.
+  - **`queryId` {string}** stable-stringified query params
+  - **`queryParams` {Object}** the query params, excluding $limit and $skip.
+  - **`total` {number}** the total number of records matching the query.
+- **`previousQuery` {Computed Object}** an object with the same format as `latestQuery`.
+
+#### Data Retrieval & Watching
+
+- **`find` {Function}** the same as `store.find`.
+- **`request` {Ref Promise}** the promise for the current request.
+- **`requestCount` {Computed number}** the number of requests sent by this `Find` instance.
+- **`queryWhen` {Function}** pass a function that returns a boolean into `queryWhen` and that function will be run before retrieving data. If it returns false, the query will not happen.
+- **`findInStore` {Function}** the same as `store.findInStore`.
+
+#### Request State
+
+- **`isPending` {Computed boolean}** returns true if the current `request` is pending.
+- **`haveBeenRequested` {Computed boolean}** returns true if any request has been sent by this `Find` instance. Never resets for the life of the instance.
+- **`haveLoaded` {Computed boolean}** essentially the same purpose, but opposite of `isPending`. Returns true once the request finishes.
+- **`error` {Computed error}** will contain any error. The error will be cleared when a new request is made or when manually calling `clearError`.
+- **`clearError` {Function}** call this function to clear the `error`.
+
+#### Pagination Utils
+
+- **`pageCount` {Computed number}** the number of pages for the current query params.
+- **`currentPage` {Ref number}** the current page number. Can be set to change to that page, or use `toPage(pageNumber)`.
+- **`canPrev` {Computed boolean}** returns true if there is a previous page.
+- **`canNext` {Computed boolean}** returns true if there is a next page.
+- **`next` {Function}** moves to the next page of data.
+- **`prev` {Function}** moves to the previous page of data.
+- **`toStart` {Function}** moves to the first page of data.
+- **`toEnd` {Function}** moves to the last page of data.
+- **`toPage(pageNumber)` {Function}**
+
+## Declarative vs. Imperative Flow
+
+We stated earlier that the new `useFind` supports both declarative and imperative workflows. What's the difference and what does it mean in the code?  The short definitions are these:
+
+- Imperative code gives commands at each step and expects to be obeyed. The figurative verbal summary would be "Do this. Now do this. Now do that."
+- Declarative code gives a full specification of how to act based on conditions. You sort of teach the code correct principles and let it govern itself. The figurative verbal summary would be "Here are instructions of how to respond to different conditions. Watch for those conditions and act accordingly."
+
+So imperative code is like pushing instructions to the computer one line at a time.  Declarative code is more like having the computer pull from a set of instructions based on conditions.
+
+In Vue, the declarative APIs include `computed` and `watch` and other APIs like `watchEffect` that run by watching other values.
+
+### Declarative Example
+
+To implement `useFind` declaratively, we can use computed params.  The below example creates four declarative queries which watch a value called `date`. Suppose you have a set of tasks related to features which users can upvote.  Tasks have an `isCompleted` attribute, an `upvotes` count and a `dueDate` property.  Now let's suppose we're going to build a tasks dashboard. You want to see various types of task lists all based on a chosen date. So let's pretend that these are our requirements:
+
+- The 5 most-upvoted tasks for the day
+- The 5 least-upvoted tasks for the day
+- Twenty completed tasks for the day
+- The 10 most-upvoted, incomplete tasks for the day
 
 ```ts
-interface UseFindOptions {
-  model: Function
-  params: Params | Ref<Params>
-  fetchParams?: Params | Ref<Params>
-  queryWhen?: ComputedRef<boolean> | QueryWhenFunction
-  qid?: string
-  immediate?: boolean
-}
+import { useTasks } from '../stores/tasks'
+
+const taskStore = useTasks()
+
+const date = ref(new Date())
+
+// 5 most-upvoted tasks for the day
+const paramsMostUpvoted = computed(() => ({ 
+  query: { 
+    dueDate: date.value, 
+    $sort: { upvotes: -1 },
+    $limit: 5,
+  },
+  onServer: true
+}))
+const { data: mostUpvoted } = taskStore.useFind(paramsMostUpvoted)
+
+// 5 least-upvoted tasks for the day
+const paramsLeastUpvoted = computed(() => ({ 
+  query: { 
+    dueDate: date.value, 
+    $sort: { upvotes: 1 },
+    $limit: 5,
+  },
+  onServer: true
+}))
+const { data: leastUpvotedTasks } = taskStore.useFind(paramsLeastUpvoted)
+
+// Twenty completed tasks for the day
+const paramsComplete = computed(() => ({ 
+  query: { 
+    dueDate: date.value, 
+    isCompleted: true,
+    $limit: 20,
+  },
+  onServer: true
+}))
+const { data: completedTasks } = taskStore.useFind(paramsComplete)
+
+// Ten most-voted-for, incomplete tasks for the day
+const paramsIncomplete = computed(() => ({ 
+  query: { 
+    dueDate: date.value, 
+    isCompleted: false,
+    $sort: { upvotes: -1 },
+    $limit: 10,
+  },
+  onServer: true
+}))
+const { data: incompleteTasks } = taskStore.useFind(paramsIncomplete)
 ```
 
-And here's a look at each individual property:
+In the above scenario, we can bind to the task lists in the template and display the four reports.  Now, what code do we need to write to show data for a different date?  Let's see what a handler looks like when we have written declarative code.
 
-- `model` must be a Feathers-Pinia Model class. The Model's `find` and `findInStore` methods are used to query data.
-- `params` is a FeathersJS Params object OR a Composition API `ref` (or `computed`, since they return a `ref` instance) which returns a Params object.
-  - When provided alone (without the optional `fetchParams`), this same query is used for both the local data store and the API requests.
-  - Explicitly returning `null` will prevent an API request from being made.
-  - You can use `params.qid` to dynamically specify the query identifier for any API request. The `qid` is used for tracking pagination data and enabling the fall-through cache across multiple queries.
-  - Set `params.paginate` to `true` to use server-side pagination. Realtime updates will continue to come into the store. UI results will only update when another response is sent from the server for the same query.
-  - Set `params.debounce` to an integer and the API requests will automatically be debounced by that many milliseconds. For example, setting `debounce: 1000` will assure that the API request will be made at most every 1 second.
-  - Set `params.temps` to `true` to include temporary (local-only) items in the results. Temporary records are instances in the store without a server-assigned id. They have not been saved to the database, yet.
-  - Set `params.copies` to `true` to include cloned items in the results. The queried items get replaced with the corresponding copies from `copiesById`
-- `fetchParams` This is a separate set of params that, when provided, will become the params sent to the API server. The `params` will then only be used to query data from the local data store.
-  - Explicitly returning `null` will prevent an API request from being made (but only for Vue 3. For Vue 2, use `queryWhen`).
-- `queryWhen` provides a logical separation for preventing API requests _outside_ of the `params`. It must be a `computed` property that returns one of the following:
-  - a `boolean`
-  - a `QueryWhenFunction`, receiving a `QueryWhenContext` and returning a boolean. <Badge text="0.25.0+" />
-- `qid` allows you to specify a query identifier (used in the pagination data in the store). This can also be set dynamically by returning a `qid` in the params.
-- `immediate`, which is `true` by default, determines if the internal `watch` should fire immediately. Set `immediate: false` and the query will not fire immediately. It will only fire on subsequent changes to the params.
+### Declarative Handler
 
-## Returned Attributes
-
-Notice the `tutorialsData` in the previous example. You can see that there's an `tutorialsData.items` property, which is returned at the bottom of the `setup` method as `tutorials`. There are many more attributes available in the object returned from `useFind`. We can learn more about the return values by looking at its TypeScript interface, below.
+With declarative code, we only need to change the `date` variable.  The computed properties will tell `useFind` to fetch new data, ✨automagically✨. There's no need to manually fetch. When the data returns, the lists will update on their own. As long as your template is rendering correctly, there's no more work to do.
 
 ```ts
-interface UseFindData {
-  items: Ref<any>
-  paginationData: Ref<object>
-  servicePath: Ref<string>
-  qid: Ref<string>
-  isPending: Ref<boolean>
-  haveBeenRequested: Ref<boolean>
-  haveLoaded: Ref<boolean>
-  error: Ref<Error>
-  debounceTime: Ref<number>
-  latestQuery: Ref<object>
-  isLocal: Ref<boolean>
-  find: Function
-  isSsr: Ref<boolean>
-  request: Ref<Promise<Request> | null>
+// A handler to change the date from the UI
+const setDate = (newDate) => {
+  date.value = newDate
 }
 ```
 
-Let's look at the functionality that each one provides:
+### Imperative Example
 
-- `items` is the list of results. By default, this list will be reactive, so if new items are created which match the query, they will show up in this list automagically.
-- `servicePath` is the FeathersJS service path that is used by the current model. This is mostly only useful for debugging.
-- `isPending` is a boolean that indicates if there is an active query. It is set to `true` just before each outgoing request. It is set to `false` after the response returns. Bind to it in the UI to show an activity indicator to the user.
-- `haveBeenRequested` is a boolean that is set to `true` immediately before the first query is sent out. It remains true throughout the life of the component. This comes in handy for first-load scenarios in the UI.
-- `haveLoaded` is a boolean that is set to true after the first API response. It remains `true` for the life of the component. This also comes in handy for first-load scenarios in the UI.
-- `isLocal` is a boolean that is set to true if this data is local only.
-- `qid` is currently the primary `qid` provided in params. It might become more useful in the future.
-- `debounceTime` is the current number of milliseconds used as the debounce interval.
-- `latestQuery` is an object that holds the latest query information. It populates after each successful API response. The information it contains can be used to pull data from the `paginationData`.
-- `paginationData` is an object containing all of the pagination data for the current service.
-- `error` is null until an API error occurs. The error object will be serialized into a plain object and available here.
-- `find` is the find method used internally. You can manually make API requests. This is most useful for when you have `paginate: true` in the params. You can manually query refreshed data from the server, when desired. Calling `find` actually calls in the internal `findProxy`, so if you have `debounceTime` set, requests will be debounced.
-- `isSsr` is a boolean that matches the value of the `ssr` option in either `setupFeathersPinia` or `defineStore`. <Badge text="0.27.0+" />
-- `request` will contain the promise for any active request. <Badge text="0.27.0+" />
-
-## Conditionally Running Queries
-
-There are two ways of controlling whether or not queries go out.
-
-- Return `null` in the `params` or `fetchParams`. (Vue 3, only)
-- Use the `queryWhen` property. This is the recommended option.
-
-The `queryWhen` property accepts a computed property that returns either a boolean OR a function that returns a boolean.
-
-### `queryWhen` as a Computed Boolean
-
-The below example uses a boolean. No query is made initially, because `queryWhen` returns false.  When the timeout sets `isReady` to true, `queryWhen` returns true and Vue's wonderful reactivity layer automagically fires the request.  If you were to toggle `isReady`, each time it evaluates to `true` the request will go out again.
-
-```vue
-<script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useFind } from 'feathers-pinia'
-import { useUsers } from '~/store/users.ts'
-
-const userStore = useUsers()
-
-const isReady = ref(false)
-const params = computed(() => {
-  return { query: { $limit: 10, $skip: 0 } }
-})
-const queryWhen = computed(() => isReady.value)
-const { items } = useFind({
-  model: userStore.Model,
-  params,
-  queryWhen
-})
-
-setTimeout(() => {
-  isReady.value = true
-}, 5000)
-</script>
-```
-
-### `queryWhen` as a Computed Function <Badge text="0.25.0+" />
-
-The `queryWhen` property can also be implemented as a computed property that returns a function. The function receives a `context` object and needs to return a boolean.  The `context` object has some useful information that you can use to determine whether to return `true` or `false`. Here's what `context` looks like:
+To write the example as imperative-focused code, we only need to replace the `computed` properties with `reactive` ones. A `reactive` object will not autmoatically update when sub-values like `date` change, so we just have to pass the date to each query.  Now we have more repetition. Notice how the same date is specified four times.
 
 ```ts
-export interface QueryWhenContext {
-  items: ComputedRef<AnyData[]>
-  queryInfo: QueryInfo
-  qidData: PaginationStateQid
-  queryData: PaginationStateQuery
-  pageData: PaginationStatePage
-}
+import { useTasks } from '../stores/tasks'
+
+const taskStore = useTasks()
+
+// 5 most-upvoted tasks for the day
+const paramsMostUpvoted = reactive({ 
+  query: { 
+    dueDate: new Date(), 
+    $sort: { upvotes: -1 },
+    $limit: 5,
+  },
+  onServer: true
+})
+const { data: mostUpvoted, find: findMostUpvoted } = taskStore.useFind(paramsMostUpvoted)
+
+// 5 least-upvoted tasks for the day
+const paramsLeastUpvoted = reactive({ 
+  query: { 
+    dueDate: new Date(), 
+    $sort: { upvotes: 1 },
+    $limit: 5,
+  },
+  onServer: true
+})
+const { data: leastUpvotedTasks, find: findLeastUpvoted } = taskStore.useFind(paramsLeastUpvoted)
+
+// Twenty completed tasks for the day
+const paramsComplete = reactive({ 
+  query: { 
+    dueDate: new Date(), 
+    isCompleted: true,
+    $limit: 20,
+  },
+  onServer: true
+})
+const { data: completedTasks, find: findComplete } = taskStore.useFind(paramsComplete)
+
+// Ten most-voted-for, incomplete tasks for the day
+const paramsIncomplete = reactive({ 
+  query: { 
+    dueDate: new Date(), 
+    isCompleted: false,
+    $sort: { upvotes: -1 },
+    $limit: 10,
+  },
+  onServer: true
+})
+const { data: incompleteTasks, find: findIncomplete } = taskStore.useFind(paramsIncomplete)
 ```
 
-The `qidData`, `queryData`, and `pageData` properties all come from the service store's `pagination` object, which contains useful information for every query.  Let's review the `pagination` object before we see how to use the `context` object.
+### Imperative Handler
 
-BE CAREFUL when using `queryWhen` as a computed function because it can cause infinite loops when the return value is truthy.  The computed value reruns whenever the data in the `QueryWhenContext` changes.  The general way to avoid recomputes is to make sure you toggle the value to false after the response comes back.  Leaving it truthy will likely cause the infinite looping behavior.
-
-#### Pagination State <Badge text="0.25.0+" />
-
-The `qid`, `queryId`, and `pageId` in the below structure are all determined by the attributes in the params.
-
-- `qid` comes from `params.qid`. All queries with the same `qid` will be kept in the same object. The `mostRecentQuery` attribute contains queryInfo about where in the pagination structure you'll find the most recent query.
-- `queryId` is a stringified representation of all attributes in `params.query` except `$limit` and `$skip`.
-- `pageId` is a stringified representation of `$limit` and `$skip`, which are the page-level attributes.
+What does a handler look like for an imperative-minded example of our test scenario?  Let's take a look.  First, we have to update each set of params, since they can't automatically compute themselves (that's what `computed` properties are for). Then we have to manually tell `useFind` to request the new data.
 
 ```ts
-// This is a pseudo-TypeScript interface that illustrates the pagination structure.
-interface PaginationState {
-  [qid: string]: {        // This level is the `qidData`
-    [queryId: string]: {  // This level is the `queryData`
-      [pageId: string]: { // This level is the `pageData`
-        ids: Id[]
-        pageParams: QueryPagination
-        queriedAt: number // timestamp
-        ssr: boolean
-      }
-      queryParams: Query
-      total: number
-    }
-    mostRecent: MostRecentQuery
-  }
-}
-interface MostRecentQuery {
-  pageId: string
-  pageParams: QueryPagination
-  queriedAt: number
-  query: Query
-  queryId: string
-  queryParams: Query
-  total: number
+// A handler to change the date for each query
+const setDate = async (newDate) => {
+  paramsMostUpvoted.query.date = newDate
+  paramsLeastUpvoted.query.date = newDate
+  paramsComplete.query.date = newDate
+  paramsIncomplete.query.date = newDate
+  // fetch data for the new date
+  await Promise.all([
+    findMostUpvoted()
+    findLeastUpvoted()
+    findComplete()
+    findIncomplete()
+  ])
 }
 ```
 
-#### `queryWhen` Function Example <Badge text="0.25.0+" />
+Look how much longer the imperative code is!  We had to manually tell `useFind` to update the date in each set of params. Then we had to manually command each one to fetch the new data.  With declarative-minded code, we can change the `date` as the source of truth. When it receives a `computed` property, `useFind` knows to re-fetch when changes occur.
 
-```vue
-<script setup lang="ts">
-import { ref, computed } from 'vue'
-import { useFind } from 'feathers-pinia'
-import { useUsers } from '~/store/users.ts'
+So is it better to write declarative code? The answer is usually yes. It often makes the most sense to write declarative code, but some situations will work better with imperative code.  When writing in Vue, sometimes declarative code will lead to infinite loops. If you have three computed variables that watch each other, they will run forever. This code would create an infinite loop:
 
-const userStore = useUsers()
-
-const params = computed(() => {
-  return { query: { $limit: 10, $skip: 0 } }
-})
-// Notice the two arrow functions. This is a computed that returns a function.
-// Lots of return examples here. Not valid JS, just for illustration.  ;)
-const queryWhen = computed(() => (context) => {
-  const { items, queryInfo, qidData, queryData, pageData } = context
-
-  // Allow the query if we don't have any items. If you do this you have to manually call find(), as done in the timeout.
-  return !items.length
-
-  // Allow the query if over 5 minutes have passed
-  return !pageData || pageData?.queriedAt < new Date.getTime() - 300_000
-})
-const { items, find } = useFind({
-  model: userStore.Model,
-  params,
-  queryWhen
-})
-
-setTimeout(() => {
-  find()
-}, 5000)
-</script>
+```ts
+const a = computed(() => c.value + 1)
+const b = computed(() => a.value + 1)
+const c = computed(() => b.value + 1)
 ```
 
-A couple of best practices
+Can you see the loop? It will start as soon as you try to read any of the variables.
 
-1. Always use `$limit` and `$skip` in queries. This allows Feathers-Pinia to store more accurate pagination data.
-2. Recognize that pagination-related objects will be `undefined` until after the first query response. This is why we use the conditional in `pageData?`.queriedAt`. It will only exist if a matching query has previously been made.
+- When reading `a` it will try to read `c` before adding `1`.
+- Reading `c` will cause it to try to read `b` before adding `1` to the return value of `b`.
+- But when reading `b`, it will try to read `a` again.
 
-## Working with Refs
+None of the variables will ever return a value because they'll keep reading each other in a loop. The loop will go on until the allocated memory space for tracking current operations is too full, also known as a "stack overflow".
 
-Pay special attention to the properties of type `Ref`, in the TypeScript interface, above. Those properties are Vue Composition API `ref` instances. This means that you need to reference their value by using `.value`. In the next example the `completeTodos` and `incompleteTodos` are derived from the `todos`, using `todos.value`
+Declarative queries can work exactly the same way. When queries re-run based on other data and that logic goes in a loop, you'll end up with an asynchronous stack overflow. In order to fix the problem, you can switch one of them to imperative to break the automated flow. That's why `useFind` supports both workflows.
 
-```html
-<template>
-  <div>
-    <li
-      v-for="tutorial in tutorials"
-      :key="tutorial.id"
-    >
-      {{ tutorial.name }}
-    </li>
-  </div>
-</template>
+<BlockQuote>
 
-<script setup>
-  import { useFind } from 'feathers-pinia'
-  import { useTodos } from '../store/todos'
+In the above scenario, if you use the [`feathers-batch` plugins](https://github.com/feathersjs-ecosystem/feathers-batch) on the client and server, it will automatically group all queries into a single request. It really speeds up your API with almost zero effort on your part.  Give it a try!
 
-  const todoStore = useTodos()
+</BlockQuote>
 
-  const params = computed(() => {
-    return {
-      query: {},
-    }
-  })
-  const { items: todos } = useFind({ model: todoStore.Todo, params })
-  // Notice the "todos.value"
-  const completeTodos = computed(() => todos.value.filter((todo) => todo.isComplete))
-  const incompleteTodos = computed(() => todos.value.filter((todo) => !todo.isComplete))
-</script>
-```
-
-## Troubleshooting Missing Paginated Data
-
-One problem that can occur when you have reactive params.query is it's possible to modify the params in a hook. The most common problems happen with hooks that modify the query, like `paramsFromServer` from either `feathers-hooks-common` or `feathers-graph-populate`.  If you are using any hook that modifies `params.query`, you need to make a shallow clone of the object to prevent the reactive one you provide to `useFind` from getting modified.  `useFind` uses the original query object to process the incoming paginated data.  So if the original query gets changed by downstream hooks, no data will show up, and no errors will show, either.
-
-Steps to troubleshoot missing data:
-
-1. Make sure you see your data arriving in the Chrome Dev Tools Network tab.
-1. Turn off (comment out) any hooks on outbound requests and see if your data shows up again.
-1. If you can't turn off hooks, try adding a global hook that creates a shallow copy of the params:
-
-```js
-app.hooks({
-  before: {
-    all: [
-      // Replace context.params with a shallow clone to prevent future hooks from messing with the reactive query object.
-      context => {
-        const query = { ...context.params.query }
-        context.params = { ...context.params, query }
-      }
-    ]
-  }
-})
-```
+## Examples

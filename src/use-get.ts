@@ -1,120 +1,138 @@
-import { reactive, computed, toRefs, unref, watch, Ref, ComputedRef } from 'vue-demi'
-import { Params } from './types'
-import { ModelStatic } from './service-store/types'
-import { Id } from '@feathersjs/feathers'
-import { BaseModel } from './service-store'
+import type { Params } from './types'
+import type { ServiceStoreDefault, GetFn, GetClassParamsStandalone, GetClassParams } from './service-store/types'
+import type { MaybeRef } from './utility-types'
+import type { Id } from '@feathersjs/feathers'
+import { computed, ComputedRef, isReadonly, isRef, Ref, ref, unref, watch } from 'vue-demi'
+import { BaseModel } from './service-store/base-model'
 
-interface UseGetOptions<M extends BaseModel> {
-  model: ModelStatic<M>
-  id: Ref<Id | null> | ComputedRef<Id | null> | null
-  params?: Ref<Params>
-  queryWhen?: Ref<boolean>
-  local?: boolean
-  immediate?: boolean
-}
-interface UseGetState {
-  isPending: boolean
-  hasBeenRequested: boolean
-  hasLoaded: boolean
-  error: null | Error
-  isLocal: boolean
-  request: Promise<any> | null
+type Store<M extends BaseModel> = ServiceStoreDefault<M>
+
+export function useGet<M extends BaseModel>(id: Id, params: MaybeRef<GetClassParamsStandalone<M>>) {
+  return new Get(id, params)
 }
 
-interface UseGetComputed {
-  item: ComputedRef<any>
-  servicePath: ComputedRef<string>
+export class Get<M extends BaseModel> {
+  id: Ref<Id | null>
+  params: Ref<GetClassParams>
   isSsr: ComputedRef<boolean>
-}
 
-export function useGet<M extends BaseModel = BaseModel>({
-  model,
-  id,
-  params = computed(() => ({})),
-  queryWhen = computed((): boolean => true),
-  local = false,
-  immediate = true,
-}: UseGetOptions<M>) {
-  if (!model) {
-    throw new Error(`No model provided for useGet(). Did you define and register it with FeathersPinia?`)
-  }
+  // Data
+  data: ComputedRef<M | null>
+  ids: Ref<Id[]>
+  getFromStore: (id: Id | null, params: Params) => M | undefined
 
-  function getId() {
-    return unref(id)
-  }
-  function getParams() {
-    return unref(params)
-  }
+  // Requests & Watching
+  get: GetFn<M>
+  request: Ref<Promise<M | undefined>>
+  requestCount: Ref<number>
+  queryWhen: (queryWhenFn: () => boolean) => void
 
-  const state = reactive<UseGetState>({
-    isPending: false,
-    hasBeenRequested: false,
-    hasLoaded: false,
-    error: null,
-    isLocal: local,
-    request: null,
-  })
+  // Request State
+  isPending: Ref<boolean>
+  hasBeenRequested: Ref<boolean>
+  hasLoaded: Ref<boolean>
+  error: ComputedRef<any>
+  clearError: () => void
 
-  const computes: UseGetComputed = {
-    item: computed(() => {
-      const unrefId = getId()
-      if (unrefId === null) {
-        return null
+  constructor(_id: MaybeRef<Id | null>, _params: MaybeRef<GetClassParamsStandalone<M>>) {
+    const store = unref(_params).store as Store<M>
+    const id = isRef(_id) ? (isReadonly(_id) ? ref(_id.value) : _id) : ref(_id)
+    const params = isRef(_params) ? (isReadonly(_params) ? ref(_params.value) : _params) : ref(_params)
+
+    // Remove the store from the provided params
+    delete (params.value as GetClassParams).store
+
+    /*** ID & PARAMS ***/
+    this.id = id as Ref<Id | null>
+    this.params = params as Ref<GetClassParams>
+    const { immediate = true, watch: _watch = true, onServer = false } = params.value
+    this.isSsr = computed(() => store.isSsr)
+
+    /*** REQUEST STATE ***/
+    const isPending = ref(false)
+    const hasBeenRequested = ref(false)
+    const hasLoaded = ref(false)
+    const error = ref(null)
+    this.isPending = computed(() => isPending.value)
+    this.hasBeenRequested = computed(() => hasBeenRequested.value)
+    this.hasLoaded = computed(() => hasLoaded.value)
+    this.error = computed(() => error.value)
+    this.clearError = () => (error.value = null)
+
+    /*** STORE ITEMS ***/
+    this.ids = ref([])
+    const mostRecentId = computed(() => {
+      return this.ids.value.length && this.ids.value[this.ids.value.length - 1]
+    })
+    this.data = computed(() => {
+      if (isPending.value && mostRecentId.value != null) {
+        return store.getFromStore(mostRecentId.value, params) || null
       }
-      return model.getFromStore(unrefId, getParams()) || null
-    }),
-    servicePath: computed(() => model.servicePath),
-    isSsr: computed(() => model.store.isSsr),
-  }
+      return store.getFromStore(id.value, params) || null
+    })
+    this.getFromStore = store.getFromStore
 
-  async function get(id: Id | null, params?: Params): Promise<M | undefined | any> {
-    const idToUse = unref(id)
-    const paramsToUse = unref(params)
+    /*** QUERY WHEN ***/
+    let queryWhen = () => true
+    this.queryWhen = (queryWhenFn: () => boolean) => {
+      queryWhen = queryWhenFn
+    }
 
-    if (idToUse != null && queryWhen.value && !state.isLocal) {
-      state.isPending = true
-      state.error = null
-      state.hasBeenRequested = true
+    /*** SERVER FETCHING ***/
+    this.requestCount = ref(0)
+    this.request = ref(null) as any
+    this.get = async (__id?: MaybeRef<Id>, params?: MaybeRef<Params>) => {
+      const _id = unref(__id || id)
+      const _params = unref(params)
 
-      const request = paramsToUse != null ? model.get(idToUse, paramsToUse) : model.get(idToUse)
-      state.request = request
+      if (!queryWhen()) return
+
+      if (_id == null) {
+        throw new Error('id is required for feathers-pinia get requests')
+      }
+
+      this.requestCount.value++
+      hasBeenRequested.value = true // never resets
+      isPending.value = true
+      hasLoaded.value = false
+      error.value = null
 
       try {
-        const response = await request
-        state.isPending = false
-        state.hasLoaded = true
+        const response = await store.get(_id as Id, _params)
+
+        // Keep a list of retrieved ids
+        if (response && _id) {
+          this.ids.value.push(_id)
+        }
+        hasLoaded.value = true
+
         return response
-      } catch (error: any) {
-        state.isPending = false
-        state.error = error
-        return error
+      } catch (err: any) {
+        error.value = err
+        throw err
+      } finally {
+        isPending.value = false
       }
-    } else {
-      return Promise.resolve(undefined)
     }
-  }
 
-  watch(
-    () => [getId(), getParams(), queryWhen.value],
-    ([id, params]) => {
-      get(id as Id | null, params as Params)
-    },
-    { immediate },
-  )
+    const request = this.request
+    const makeRequest = async (id: Id, params: MaybeRef<Params>) => {
+      if (!id) return
+      request.value = this.get(id, params)
+      await request.value
+    }
 
-  // Clear error when an item is found
-  watch(
-    () => computes.item.value,
-    (item) => {
-      if (item) {
-        state.error = null
-      }
-    },
-  )
+    // Watch the id
+    if (onServer && _watch) {
+      watch(
+        id,
+        async () => {
+          await makeRequest(id as any, params)
+        },
+        { immediate },
+      )
+    }
 
-  return {
-    ...toRefs(state),
-    ...computes,
-    get,
+    return this
   }
 }

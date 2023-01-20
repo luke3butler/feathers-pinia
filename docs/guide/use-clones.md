@@ -3,12 +3,19 @@ outline: deep
 ---
 
 <script setup>
+import BlockQuote from '../components/BlockQuote.vue'
 import V2Block from '../components/V2Block.vue'
 </script>
 
 <V2Block />
 
 # useClones
+
+<BlockQuote type="danger" label="🚧 this page not yet updated 🚧">
+
+These docs haven't been updated yet. See examples of the new API in the [Migrate from 0.x](/guide/migrate-from-v0#useclones-api-change) page.
+
+</BlockQuote>
 
 [[toc]]
 

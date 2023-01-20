@@ -1,4 +1,4 @@
-import {
+import type {
   ServiceStoreDefaultActions,
   UpdatePaginationForQueryOptions,
   RequestType,
@@ -9,9 +9,17 @@ import {
   HandleFindErrorOptions,
   AnyData,
   MakeServiceActionsOptions,
+  CloneOptions,
+  UseFindWatchedOptions,
+  UseGetOptions,
+  FindClassParams,
+  FindClassParamsStandalone,
+  GetClassParams,
+  GetClassParamsStandalone,
 } from './types'
-import { Params } from '../types'
-import { Id, NullableId } from '@feathersjs/feathers'
+import type { Params } from '../types'
+import type { Id, NullableId } from '@feathersjs/feathers'
+import type { MaybeArray, MaybeRef, TypedActions } from '../utility-types'
 import { _ } from '@feathersjs/commons'
 import fastCopy from 'fast-copy'
 import {
@@ -26,11 +34,15 @@ import {
   hasOwn,
   getSaveParams,
   markAsClone,
+  copyAssociations,
 } from '../utils'
 import { unref, set } from 'vue-demi'
 import { StateTree, _GettersTree } from 'pinia'
 import { BaseModel } from './base-model'
-import { MaybeArray, MaybeRef, TypedActions } from '../utility-types'
+import { useFind } from '../use-find'
+import { useGet } from '../use-get'
+import { useFindWatched } from '../use-find-watched'
+import { useGetWatched } from '../use-get-watched'
 
 type ServiceStoreTypedActions<M extends BaseModel = BaseModel> = TypedActions<
   ServiceStoreDefaultState<M>,
@@ -40,7 +52,7 @@ type ServiceStoreTypedActions<M extends BaseModel = BaseModel> = TypedActions<
 
 export function makeActions<
   M extends BaseModel = BaseModel,
-  S extends StateTree = StateTree,
+  S extends StateTree = {},
   G extends _GettersTree<S> = {},
   A = {},
 >(options: MakeServiceActionsOptions<M, S, G, A>): ServiceStoreDefaultActions<M> & A {
@@ -95,16 +107,19 @@ export function makeActions<
      *   @param response
      */
     async handleFindResponse({ params, response }: HandleFindResponseOptions) {
+      const { idField } = this
       const { qid = 'default', query, preserveSsr = false } = params
+      // Normalize response so data is always found at response.data
+      if (Array.isArray(response)) response = { data: response }
 
-      this.addOrUpdate(response.data || response)
+      this.addOrUpdate(response.data)
 
       // The pagination data will be under `pagination.default` or whatever qid is passed.
       response.data && this.updatePaginationForQuery({ qid, response, query, preserveSsr })
 
       // Swap out the response records for their Vue-observable store versions
-      const data = response.data || response
-      const mappedFromState = data.map((i: any) => this.itemsById[getId(i)])
+      const data = response.data
+      const mappedFromState = data.map((i: any) => this.itemsById[getId(i, idField)])
       if (mappedFromState[0] !== undefined) {
         response.data ? (response.data = mappedFromState) : (response = mappedFromState)
       }
@@ -170,16 +185,16 @@ export function makeActions<
     create(data: AnyDataOrArray, _params?: MaybeRef<Params>) {
       const params = getSaveParams(_params)
 
-      const { tempIdField } = this
+      const { idField, tempIdField } = this
 
       if (!Array.isArray(data)) {
-        this.setPendingById(getId(data) || data[tempIdField], 'create', true)
+        this.setPendingById(getId(data, idField) || data[tempIdField], 'create', true)
       }
 
       return this.service
-        .create(cleanData(data, this.tempIdField), params)
+        .create(cleanData(data, this.Model.tempIdField), params)
         .then((response: any) => {
-          return this.addOrUpdate(restoreTempIds(data, response, this.tempIdField))
+          return this.addOrUpdate(restoreTempIds(data, response, this.Model.tempIdField))
         })
         .catch((error: Error) => {
           // commit('setError', { method: 'create', error })
@@ -187,7 +202,7 @@ export function makeActions<
         })
         .finally(() => {
           if (!Array.isArray(data)) {
-            this.setPendingById(getId(data) || data[tempIdField], 'create', false)
+            this.setPendingById(getId(data, idField) || data[tempIdField], 'create', false)
           }
         })
     },
@@ -197,7 +212,7 @@ export function makeActions<
       this.setPendingById(id, 'update', true)
 
       return this.service
-        .update(id, cleanData(data, this.tempIdField), params)
+        .update(id, cleanData(data, this.Model.tempIdField), params)
         .then((data: any) => {
           return this.addOrUpdate(data)
         })
@@ -218,7 +233,7 @@ export function makeActions<
       this.setPendingById(id, 'patch', true)
 
       return this.service
-        .patch(id, cleanData(data, this.tempIdField), params)
+        .patch(id, cleanData(data, this.Model.tempIdField), params)
         .then((data: any) => {
           return this.addOrUpdate(data)
         })
@@ -258,8 +273,9 @@ export function makeActions<
     },
     removeFromStore<T>(data: T): T {
       const { items } = getArray(data)
+      const { idField, tempIdField } = this
       const idsToRemove = items
-        .map((item: any) => (getId(item) != null ? getId(item) : getTempId(item, this.tempIdField)))
+        .map((item: any) => (getId(item, idField) != null ? getId(item, idField) : getTempId(item, tempIdField)))
         .filter((id: any) => id != null)
 
       set(this, 'itemsById', _.omit(this.itemsById, ...idsToRemove))
@@ -280,11 +296,11 @@ export function makeActions<
       return this.addOrUpdate(data)
     },
     addOrUpdate(data: AnyDataOrArray): MaybeArray<any> {
-      const { tempIdField } = this
+      const { idField, tempIdField } = this
       const { items, isArray } = getArray(data)
 
       const _items = items.map((item: AnyData) => {
-        if (getId(item) != null && getTempId(item, tempIdField) != null) {
+        if (getId(item, idField) != null && getTempId(item, tempIdField) != null) {
           return this.moveTempToItems(item)
         } else {
           return addOrMergeToStore(item, this, options)
@@ -295,8 +311,8 @@ export function makeActions<
     },
 
     moveTempToItems(data: AnyData) {
-      const { tempIdField } = this
-      const id = getId(data)
+      const { idField, tempIdField } = this
+      const id = getId(data, idField)
       const tempId = getTempId(data, tempIdField)
       const existingTemp = this.tempsById[tempId]
       if (existingTemp) {
@@ -314,45 +330,66 @@ export function makeActions<
       set(this, 'clonesById', {})
     },
 
-    clone(item: M, data = {}): M {
-      const tempId = getTempId(item, this.tempIdField)
+    clone(item: M, data = {}, options: CloneOptions = {}): M {
+      const tempId = getTempId(item, this.Model.tempIdField)
       const placeToStore = tempId != null ? 'tempsById' : 'itemsById'
-      const id = getAnyId(item, this.tempIdField)
+      const id = getAnyId(item, this.Model.tempIdField, this.Model.idField)
       const originalItem = this[placeToStore][id]
       const existing = this.clonesById[id]
 
       // Maintain reactivity for existing clones
-      if (existing && existing.constructor.name === originalItem.constructor.name) {
-        const cloneReset: M = Object.assign(existing, originalItem, data)
-
-        // Remove properties that may have been added to the clone but are not in the original
-        Object.keys(cloneReset).forEach((key) => {
-          if (!hasOwn(originalItem, key)) {
-            delete (cloneReset as any)[key]
-          }
-        })
-        markAsClone(cloneReset)
-
-        return cloneReset
+      if (existing) {
+        if (options.useExisting) return existing
+        return this.reset(item, data) as M
       } else {
+        // Create the clone with any applicable associations
         const clone = fastCopy(originalItem)
         markAsClone(clone)
+        copyAssociations(originalItem, clone, clone.Model.associations)
+
+        // Copy over any provided data
         Object.assign(clone, data)
 
+        // Store and return the clone
         set(this.clonesById, id, clone)
         return this.clonesById[id] as M // Must return the item from the store
       }
     },
 
-    commit(item: M): M | undefined {
-      const id = getAnyId(item, this.tempIdField)
+    commit(item: M, data = {}): M | undefined {
+      const id = getAnyId(item, this.Model.tempIdField, this.Model.idField)
       if (id != null) {
-        const tempId = getTempId(item, this.tempIdField)
+        const tempId = getTempId(item, this.Model.tempIdField)
         const placeToStore = tempId != null ? 'tempsById' : 'itemsById'
-        set(this[placeToStore], id, fastCopy(this.clonesById[id]))
+        const clone = this.clonesById[id]
+        const newOriginal = fastCopy(clone)
+        Object.assign(newOriginal, data)
+        copyAssociations(clone, newOriginal, clone.Model.associations)
 
-        return this.itemsById[id] as M
+        set(this[placeToStore], id, newOriginal)
+
+        return this[placeToStore][id] as M
       }
+    },
+
+    reset(item: M, data = {}): M {
+      const tempId = getTempId(item, this.Model.tempIdField)
+      const placeToStore = tempId != null ? 'tempsById' : 'itemsById'
+      const id = getAnyId(item, this.Model.tempIdField, this.Model.idField)
+      const originalItem = this[placeToStore][id]
+      const existingClone = this.clonesById[id]
+      if (!existingClone) return this.clone(item, data)
+
+      const cloneReset: M = Object.assign(existingClone, originalItem, data)
+
+      // Remove properties that may have been added to the clone but are not in the original
+      Object.keys(cloneReset).forEach((key) => {
+        if (!hasOwn(originalItem, key)) {
+          delete (cloneReset as any)[key]
+        }
+      })
+      markAsClone(cloneReset)
+      return cloneReset
     },
 
     /**
@@ -433,6 +470,36 @@ export function makeActions<
       const pageData = this.pagination[qid]?.[queryId]?.[pageId as string]
       pageData.ssr = false
     },
+
+    // alias to useFind, doesn't require passing the store
+    useFind(params: MaybeRef<FindClassParams>) {
+      (params.value || params).store = this
+      return useFind(params as MaybeRef<FindClassParamsStandalone<M>>)
+    },
+
+    // alias to useGet, doesn't require passing the store
+    useGet(_id: MaybeRef<Id | null>, _params: MaybeRef<GetClassParams> = {}) {
+      (_params.value || _params).store = this
+      return useGet(_id as Id, _params as MaybeRef<GetClassParamsStandalone<M>>)
+    },
+
+    // Retrieves a record only once.
+    useGetOnce(_id: MaybeRef<Id | null>, _params: MaybeRef<GetClassParams> = {}) {
+      Object.assign(_params.value || _params, { store: this, immediate: false, onServer: true })
+      const results = useGet(_id as Id, _params as MaybeRef<GetClassParamsStandalone<M>>)
+      results.queryWhen(() => !results.data.value)
+      results.get()
+      return results
+    },
+
+    // alias to useFindWatched, doesn't require passing the model
+    useFindWatched<M extends BaseModel>(options: UseFindWatchedOptions) {
+      return useFindWatched<M>({ model: this.Model as any, ...options })
+    },
+    // alias to useGetWatched, doesn't require passing the model
+    useGetWatched<M extends BaseModel>(options: UseGetOptions) {
+      return useGetWatched<M>({ model: this.Model as any, ...options })
+    },
   }
 
   return Object.assign(defaultActions, options.actions)
@@ -451,18 +518,19 @@ function setEventLockState(data: MaybeArray<Id>, event: string, val: boolean, st
 }
 
 function addOrMergeToStore(item: AnyData, store: any, opts: any) {
-  const key = getId(item) != null ? 'itemsById' : 'tempsById'
+  const { idField, tempIdField, servicePath, isSsr } = store
 
-  if (key === 'tempsById' && !item[store.tempIdField]) assignTempId(item, store.tempIdField)
+  const key = getId(item, idField) != null ? 'itemsById' : 'tempsById'
+  if (key === 'tempsById' && !item[tempIdField]) assignTempId(item, tempIdField)
 
-  const id = getAnyId(item, store.tempIdField)
+  const id = getAnyId(item, tempIdField, idField)
   const existing = store[key][id]
   if (existing) Object.assign(existing, item)
   else store[key][id] = new opts.Model(item)
 
-  if (store.isSsr || !(item instanceof opts.Model)) {
-    const classes = { [store.servicePath]: opts.Model }
-    store[key][id] = new classes[store.servicePath](existing ? Object.assign(existing, item) : item)
+  if (isSsr || !(item instanceof opts.Model)) {
+    const classes = { [servicePath]: opts.Model }
+    store[key][id] = new classes[servicePath](existing ? Object.assign(existing, item) : item)
   }
 
   const stored = store[key][id]

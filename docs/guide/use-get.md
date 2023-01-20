@@ -3,81 +3,103 @@ outline: deep
 ---
 
 <script setup>
+import Badge from '../components/Badge.vue'
+import BlockQuote from '../components/BlockQuote.vue'
 import V2Block from '../components/V2Block.vue'
 </script>
 
 <V2Block />
 
-# useGet
+# The `useGet` Utility
 
 [[toc]]
 
-The `useGet` Composition API utility provides the same fall-through cache functionality as `useFind`. It has a slightly simpler API, only requiring a `model` and `id` instead of the `params` object. Still, the `params` object can be used to send along additional query parameters in the request. Below is an example of how you might use the `useGet` utility.
+The `useGet` function is a Vue Composition API utility that takes the work out of retrieving individual records from the store or API server.
 
-The goal with the examples is to focus as much as possible on functionality and not boilerplate. As such, all examples use [auto-import](https://github.com/antfu/unplugin-auto-import) for Vue APIs like `computed` and `ref`. They also use Vue's `script setup` feature. Both features come preinstalled with the [Vitesse Template for Vue](https://github.com/antfu/vitesse) and the [Vitesse-Feathers-Pinia Demo](https://github.com/marshallswain/vitesse-feathers-pinia).
+## Overview of Features
 
-```html
-<template>
-  <div>
-    <div v-if="post">{{ post.body }}</div>
-    <div v-else-if="isPending">Loading</div>
-    <div v-else>Post not found.</div>
-  </div>
-</template>
+- **Stored Data or Server Data** - it works with either as the source.
+- **Auto-Updating** - change the `id` and it does the rest.
+- **Fall-Through Cache** - Always pulls from the store while new data is fetched.
+- **Easy Request State** - Pending request state is built in.
+- **SSR Friendly** - Data can load on the server and hydrate on the client.
 
-<script setup>
+## Usage
+
+There are two ways to use `useGet`: from the store (recommended) or standalone.
+
+### Recommended
+
+You can call `useGet` directly from the store. the advantage being that you don't have to provide the `store` in the params, as shown here:
+
+```ts
+import { useUsers } from '../store/users'
+
+interface Props {
+  id: string | number
+}
+const props = defineProps<Props>()
+const userStore = useUsers()
+
+// client-only example
+const { data: user } = userStore.useGet(props.id)
+
+// onServer example
+const { data: user, isPending, error } = userStore.useGet(props.id, { onServer: true })
+```
+
+### Standalone
+
+In standalone mode, you have to import `useGet` and provide the `store` option in the params object, as shown here:
+
+```ts
+import { useUsers } from '../store/users'
 import { useGet } from 'feathers-pinia'
-import { usePosts } from '../store/posts'
 
-const postStore = usePosts()
-
-const props = defineProps({
-  id: { type: String, required: true },
-})
-// Get the post record
-const { item: post, isPending } = useGet({ model: postStore.Model, id: props.id })
-<script>
-```
-
-See the [Routing with useGet](#routing-with-useget) portion of the patterns section, below, to see how to hook up the above component to vue-router.
-
-## Options
-
-Let's look at the TypeScript interface for the `UseGetOptions`.
-
-```ts
-interface UseGetOptions {
-  model: Function
-  id: null | string | number | Ref<null> | Ref<string> | Ref<number>
-  params?: Params | Ref<Params>
-  queryWhen?: Ref<Function>
-  local?: boolean
-  immediate?: boolean
+interface Props {
+  id: string | number
 }
+const props = defineProps<Props>()
+const userStore = useUsers()
+
+// client-only example
+const { data: user } = useGet(props.id, { store: userStore })
+
+// onServer example
+const { data: user, isPending, error } = useGet(props.id, { store: userStore, onServer: true })
 ```
 
-And here's a look at each individual property:
+## API
 
-- `model` must be a Feathers-Pinia Model class. The Model's `get` and `getFromStore` methods are used to query data.
-- `id` must be a record's unique identifier (`id` or `_id`, usually) or a ref or computed property which returns one.
-  - When the `id` changes, the API will be queried for the new record (unless `queryWhen` evaluates to `false`).
-  - If the `id` is `null`, no query will be made.
-- `params` is a FeathersJS Params object OR a Composition API `ref` (or `computed`, since they return a `ref` instance) which returns a Params object.
-  - Unlike the `useFind` utility, `useGet` does not currently have built-in debouncing.
-- `queryWhen` must be a `computed` property which returns a `boolean`. It provides a logical separation for preventing API requests apart from `null` in the `id`.
-- `immediate`, which is `true` by default, determines if the internal `watch` should fire immediately. Set `immediate: false` and the query will not fire immediately. It will only fire on subsequent changes to the `id` or `params`.
+### useGet(id, params)
 
-### Returned Attributes
+- **`id` {MaybeRef string | number}** the id of the record to retrieve. Can be a computed/ref to enable automatic updates to the returned `data`.
+- **`params` {Object}** a combined Feathers `Params` object and set of options for configuring behavior of `useGet`.
+  - **`query` {Object}** a Feathers query object.
+  - **`store` {Store}** the Feathers-Pinia service store
+  - **`onServer` {boolean}** sets up a watcher on `id` that sends API requests when id changes.
+  - **`watch` {boolean}** can be used to disable the watcher on `id` while `onServer` is true.
+  - **`immediate` {boolean}** can be used to disable the initial request to the API server while `onServer` is true.
 
-```ts
-interface UseGetData {
-  item: Ref<any>
-  servicePath: Ref<string>
-  isPending: Ref<boolean>
-  hasBeenRequested: Ref<boolean>
-  hasLoaded: Ref<boolean>
-  isLocal: Ref<boolean>
-  error: Ref<Error>
-  get: Function
-}
-```
+### Returned Object
+
+- **`id` {Ref number | string}** is a ref version of the `id` that was provided as the first argument to `useGet`. Modifying `id.value` will cause the `data` to change.
+- **`params` {Params}** is a ref version of the params. Params are not currently watched for `useGet`.
+- **`store` {Store}** the Feathers-Pinia service store
+- **`data` {Computed Object}** the record returned from the store. When `onServer` is provided in the `params`, the data will be automatically retrieved from the API server, but always returned from the store.
+- **`ids` {Ref Array}** is a list of ids that have been retrieved from the API server, in chronological order. May contain duplicates.
+- **`get` {Function}** similar to `store.get`, but if called without any arguments it will fetch/re-fetch the current `id`.
+- **`request` {Promise}** stores the current promise for the `get` request.
+- **`requestCount` {Ref number}** a counter of how many requests to the API server have been made.
+- **`getFromStore` {Function}** the same as `store.getFromStore`.
+- **`isPending` {Computed boolean}** returns true if there is a pending request. While true, the `data` will continue to hold the most recently-fetched record.
+- **`hasBeenRequested` {Computed boolean}** returns true if any record has been requested through this instance of `useGet`. It never resets.
+- **`hasLoaded` {Computed boolean}** is similar to `isPending` but with different wording.
+- **`error` {Computed error}** will display any error that occurs. The error is cleared if another request is made or if `clearError` is called.
+- **`clearError` {Function}** can be used to manually clear the `error`.
+
+## Examples
+
+### Only Query Once Per Record
+
+See the example on the [Common Patterns](./common-patterns#only-query-once-per-record) page.

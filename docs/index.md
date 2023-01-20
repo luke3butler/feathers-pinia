@@ -9,16 +9,16 @@ hero:
     alt: Feathers-Pinia Logo
   actions:
     - theme: brand
+      text: What's New
+      link: /guide/whats-new
+    - theme: alt
       text: Get Started
       link: /guide/setup
-    - theme: alt
-      text: Compare
-      link: /guide/
 
 features:
   - icon: 🍍
     title: Powered by Pinia
-    details: Pinia is Vuex 5. It's a joy to use with a clean API and memorable syntax.
+    details: Pinia is Vuex 5. It's a joy to use with a clean API and memorable syntax. 
 
   - icon: 🧁
     title: Best Practices Baked In
@@ -41,6 +41,15 @@ features:
     details: Define data structures. Write cleaner code with model-level computed properties.
 
 ---
+
+<script setup lang="ts">
+import Badge from './components/Badge.vue'
+import pkg from '../package.json'
+</script>
+
+<div style="position: fixed; z-index: 1000; top: 2px; right: 2px;">
+  <Badge :text="`v${pkg.version}`" />
+</div>
 
 <style>
 .VPImage {
